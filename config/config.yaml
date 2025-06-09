@@ -1,0 +1,218 @@
+# Chrome自动化登录爆破配置文件
+browser:
+  headless: true   # 是否无头模式
+  timeout: 60      # 页面加载超时时间(秒)
+  width: 1920      # 浏览器窗口宽度
+  height: 1080     # 浏览器窗口高度
+
+# 登录页面识别规则
+login_page_detection:
+  # 页面标题正则表达式
+  title_patterns:
+    - "(?i).*login.*"
+    - "(?i).*登录.*"
+    - "(?i).*sign.*in.*"
+    - "(?i).*log.*in.*"
+    - "(?i).*用户登录.*"
+    - "(?i).*管理员登录.*"
+  
+  # 页面URL正则表达式
+  url_patterns:
+    - "(?i).*login.*"
+    - "(?i).*signin.*"
+    - "(?i).*auth.*"
+    - "(?i).*admin.*"
+    - "(?i).*user.*"
+  
+  # 页面内容关键词
+  content_keywords:
+    - "用户名"
+    - "密码"
+    - "登录"
+    - "username"
+    - "password"
+    - "login"
+    - "sign in"
+    - "log in"
+
+# 表单元素识别规则
+form_elements:
+  # 用户名输入框识别规则
+  username_selectors:
+    - 'input[type="text"][name*="user"]'
+    - 'input[type="text"][name*="login"]'
+    - 'input[type="text"][name*="account"]'
+    - 'input[type="text"][placeholder*="用户名"]'
+    - 'input[type="text"][placeholder*="username"]'
+    - 'input[type="text"][placeholder*="账号"]'
+    - 'input[type="email"]'
+    - 'input[id*="user"]'
+    - 'input[id*="login"]'
+    - 'input[id*="account"]'
+    - 'input[class*="user"]'
+    - 'input[class*="login"]'
+  
+  # 密码输入框识别规则
+  password_selectors:
+    - 'input[type="password"]'
+    - 'input[name*="pass"]'
+    - 'input[name*="pwd"]'
+    - 'input[placeholder*="密码"]'
+    - 'input[placeholder*="password"]'
+    - 'input[id*="pass"]'
+    - 'input[id*="pwd"]'
+    - 'input[class*="pass"]'
+    - 'input[class*="pwd"]'
+  
+  # 验证码输入框识别规则
+  captcha_selectors:
+    - 'input[name*="captcha"]'
+    - 'input[name*="verify"]'
+    - 'input[name*="code"]'
+    - 'input[placeholder*="验证码"]'
+    - 'input[placeholder*="captcha"]'
+    - 'input[placeholder*="验证"]'
+    - 'input[id*="captcha"]'
+    - 'input[id*="verify"]'
+    - 'input[id*="code"]'
+    - 'input[class*="captcha"]'
+    - 'input[class*="verify"]'
+  
+  # 登录按钮识别规则
+  submit_selectors:
+    - 'input[type="submit"]'
+    - 'button[type="submit"]'
+    - 'button:contains("登录")'
+    - 'button:contains("Login")'
+    - 'button:contains("Sign In")'
+    - 'input[value*="登录"]'
+    - 'input[value*="Login"]'
+    - 'a[class*="login"]'
+    - 'div[class*="login-btn"]'
+    - 'span:contains("登录")'
+
+# 爆破配置
+bruteforce:
+  # 用户名字典
+  usernames:
+    - "admin"
+    - "administrator"
+    - "root"
+    - "user"
+    - "test"
+    - "guest"
+    - "demo"
+    - "管理员"
+  
+  # 密码字典
+  passwords:
+    - "admin"
+    - "password"
+    - "123456"
+    - "admin123"
+    - "root"
+    - "test"
+    - "guest"
+    - "demo"
+    - "123456789"
+    - "qwerty"
+    - "password123"
+    - "admin@123"
+  
+  # 爆破间隔时间(秒)
+  delay: 2
+  
+  # 最大重试次数
+  max_retries: 3
+  
+  # 并发数
+  concurrent: 1
+
+# 日志配置
+logging:
+  level: "info"  # debug, info, warn, error
+  file: ""  # 空字符串表示输出到控制台
+  format: "text"  # text, json
+  
+  # 日志文件管理
+  file_management:
+    # 是否保存到文件
+    save_to_file: true
+    
+    # 日志文件目录
+    log_dir: "logs"
+    
+    # 日志文件名格式 (支持时间格式化)
+    filename_format: "2006-01-02.log"
+    
+    # 保留日志文件数量 (0表示全部保留)
+    max_files: 0
+    
+    # 单个日志文件最大大小 (MB)
+    max_size: 100
+    
+    # 是否按日期轮转
+    rotate_by_date: true
+
+# 结果存储配置
+results:
+  # 结果保存目录
+  save_dir: "result"
+  
+  # 成功结果文件名格式
+  success_filename_format: "2006-01-02_success.txt"
+  
+  # 失败结果文件名格式 (可选，空表示不保存失败结果)
+  failure_filename_format: ""
+  
+  # 结果格式: url:username:password
+  format: "url:username:password"
+  
+  # 是否实时保存结果
+  realtime_save: true
+
+# 验证码处理配置
+captcha:
+  # 验证码检测配置
+  detection:
+    enabled: true                    # 是否启用验证码检测
+    timeout: 10                      # 检测超时时间(秒)
+    confidence_threshold: 0.7        # 检测置信度阈值
+    
+  # 验证码处理策略
+  handling:
+    skip_on_detection: true          # 检测到验证码时是否跳过
+    manual_input: false              # 是否支持人工输入
+    ocr_enabled: false               # 是否启用OCR识别
+    
+  # OCR配置 (未来扩展)
+  ocr:
+    provider: "tesseract"            # OCR提供商: tesseract, baidu, ali
+    api_key: ""                      # API密钥
+    timeout: 30                      # OCR识别超时(秒)
+    
+  # 滑块验证码配置
+  slider:
+    enabled: false                   # 是否启用滑块处理
+    simulate_human: true             # 是否模拟人类行为
+    drag_speed: 100                  # 拖拽速度(像素/秒)
+    
+  # 自定义验证码选择器
+  custom_selectors:
+    # 验证码图片选择器
+    image_selectors:
+      - "img[src*='captcha']"
+      - "img[alt*='验证码']"
+      - ".captcha-img"
+    
+    # 验证码输入框选择器  
+    input_selectors:
+      - "input[placeholder*='验证码']"
+      - "input[name*='captcha']"
+      - "#captcha_code"
+    
+    # 滑块选择器
+    slider_selectors:
+      - ".slider-captcha"
+      - ".geetest_slider"
+      - ".nc_iconfont" 

@@ -1,0 +1,98 @@
+# 编译产物
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+chrome_auto_login
+chrome_auto_login-*
+
+# 测试文件
+*.test
+*.out
+coverage.out
+
+# 依赖目录
+vendor/
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 截图和结果文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+screenshots/
+results/
+
+# 配置文件中的敏感信息（如果有）
+*_secret.yaml
+*_private.yaml
+*.env
+.env.*
+
+# Go相关
+*.prof
+*.pprof
+
+# 操作系统相关
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# 备份文件
+*.bak
+*.backup
+*.orig
+
+# 运行时生成的文件
+pid
+*.pid
+*.seed
+*.pid.lock
+
+# 调试文件
+debug
+*.debug
+
+# 自定义用户配置（避免覆盖个人配置）
+config/user_*.yaml
+config/custom_*.yaml
+
+# 测试结果和报告
+test_results/
+reports/
+*.html
+*.xml
+
+# 证书和密钥文件
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+
+# 数据文件
+*.db
+*.sqlite
+*.sqlite3
+data/
+
