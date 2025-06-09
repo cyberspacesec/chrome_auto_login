@@ -34,6 +34,26 @@ login_page_detection:
     - "login"
     - "sign in"
     - "log in"
+    - "账号"
+    - "账户"
+    - "手机号"
+    - "邮箱"
+    - "验证码"
+    - "登录名"
+
+  # 页面标题关键词
+  title_keywords:
+    - "登录"
+    - "login"
+    - "sign in"
+    - "log in"
+    - "管理系统"
+    - "后台"
+    - "admin"
+    - "administration"
+    - "auth"
+    - "authentication"
+    - "办公自动化"
 
 # 表单元素识别规则
 form_elements:
@@ -51,6 +71,24 @@ form_elements:
     - 'input[id*="account"]'
     - 'input[class*="user"]'
     - 'input[class*="login"]'
+    # 新增规则支持更多格式
+    - 'input[type="text"]:not([type="password"]):not([placeholder*="验证码"]):not([placeholder*="captcha"])'
+    - 'input[name*="name"]'
+    - 'input[name*="mobile"]'
+    - 'input[name*="phone"]'
+    - 'input[placeholder*="手机号"]'
+    - 'input[placeholder*="邮箱"]'
+    - 'input[placeholder*="登录名"]'
+    - 'input[placeholder*="账户"]'
+    - 'input[id*="username"]'
+    - 'input[id*="email"]'
+    - 'input[id*="mobile"]'
+    - 'input[class*="username"]'
+    - 'input[class*="email"]'
+    - 'input[class*="account"]'
+    # 通用文本输入框（作为最后备选）
+    - 'form input[type="text"]:first-of-type'
+    - 'input[type="text"]:not([placeholder*="验证"])'
   
   # 密码输入框识别规则
   password_selectors:
@@ -130,7 +168,7 @@ bruteforce:
 
 # 日志配置
 logging:
-  level: "info"  # debug, info, warn, error
+  level: "error"  # debug, info, warn, error
   file: ""  # 空字符串表示输出到控制台
   format: "text"  # text, json
   
