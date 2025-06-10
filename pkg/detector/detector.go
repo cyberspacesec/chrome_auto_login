@@ -1,10 +1,21 @@
 package detector
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
 
 	"github.com/cyberspacesec/chrome_auto_login/pkg/browser"
 	"github.com/cyberspacesec/chrome_auto_login/pkg/config"
@@ -12,12 +23,27 @@ import (
 
 // LoginFormElements 登录表单元素
 type LoginFormElements struct {
-	UsernameSelector string
-	PasswordSelector string
-	CaptchaSelector  string
-	SubmitSelector   string
-	HasCaptcha       bool
-	CaptchaInfo      *CaptchaInfo
+	UsernameSelector string       `json:"username_selector"`
+	PasswordSelector string       `json:"password_selector"`
+	CaptchaSelector  string       `json:"captcha_selector"`
+	SubmitSelector   string       `json:"submit_selector"`
+	HasCaptcha       bool         `json:"has_captcha"`
+	CaptchaInfo      *CaptchaInfo `json:"captcha_info"`
+}
+
+// PageAnalysis 页面分析结果
+type PageAnalysis struct {
+	Title            string             `json:"title"`
+	URL              string             `json:"url"`
+	IsLogin          bool               `json:"is_login"`
+	Confidence       float64            `json:"confidence"`
+	DetectedFeatures []string           `json:"detected_features"`
+	FormElements     *LoginFormElements `json:"form_elements"`
+	PageSource       string             `json:"page_source"`
+	Encoding         string             `json:"encoding"`
+	ResponseHeaders  map[string]string  `json:"response_headers"`
+	LoadTime         time.Duration      `json:"load_time"`
+	ErrorMessage     string             `json:"error_message"`
 }
 
 // PageDetector 页面检测器
@@ -26,194 +52,490 @@ type PageDetector struct {
 	config          *config.Config
 	logger          *logrus.Logger
 	captchaDetector *CaptchaDetector
+
+	// 检测阶段超时配置
+	pageLoadTimeout      time.Duration // 页面加载超时
+	elementDetectTimeout time.Duration // 元素检测超时
+	analysisTimeout      time.Duration // 分析超时
 }
 
 // NewPageDetector 创建页面检测器
 func NewPageDetector(browser *browser.Browser, cfg *config.Config, logger *logrus.Logger) *PageDetector {
-	detector := &PageDetector{
-		browser: browser,
-		config:  cfg,
-		logger:  logger,
+	captchaDetector := NewCaptchaDetector(browser, cfg, logger)
+
+	return &PageDetector{
+		browser:              browser,
+		config:               cfg,
+		logger:               logger,
+		captchaDetector:      captchaDetector,
+		pageLoadTimeout:      60 * time.Second, // 页面加载最长60秒
+		elementDetectTimeout: 10 * time.Second, // 元素检测10秒
+		analysisTimeout:      15 * time.Second, // 页面分析15秒
 	}
-	// 创建验证码检测器
-	detector.captchaDetector = NewCaptchaDetector(browser, cfg, logger)
-	return detector
 }
 
-// IsLoginPage 检测当前页面是否为登录页面
-func (d *PageDetector) IsLoginPage() (bool, error) {
-	title, url, content, err := d.browser.GetPageInfo()
+// IsLoginPage 检查是否为登录页面
+func (pd *PageDetector) IsLoginPage() (bool, error) {
+	startTime := time.Now()
+
+	ctx, cancel := context.WithTimeout(pd.browser.GetContext(), pd.analysisTimeout)
+	defer cancel()
+
+	// 获取页面基本信息
+	var title, url, content string
+	err := chromedp.Run(ctx,
+		chromedp.Title(&title),
+		chromedp.Location(&url),
+		chromedp.Text("body", &content),
+	)
+
 	if err != nil {
-		return false, fmt.Errorf("获取页面信息失败: %v", err)
+		pd.logger.Warnf("⚠️ 获取页面信息失败: %v", err)
+		return false, err
 	}
 
-	d.logger.Infof("检测页面: 标题='%s', URL='%s'", title, url)
+	// 使用配置规则检测
+	isLogin := pd.config.IsLoginPage(title, url, content)
 
-	isLogin := d.config.IsLoginPage(title, url, content)
+	// 增强检测逻辑
+	confidence := pd.calculateLoginConfidence(title, url, content, ctx)
+
+	loadTime := time.Since(startTime)
+	pd.logger.Debugf("页面检测完成，用时: %v, 置信度: %.2f", loadTime, confidence)
+
+	// 置信度阈值判断
+	if confidence >= 0.6 {
+		isLogin = true
+	}
 
 	if isLogin {
-		d.logger.Info("✓ 检测到登录页面")
+		pd.logger.Info("✅ 确认为登录页面")
 	} else {
-		d.logger.Info("✗ 非登录页面")
+		pd.logger.Info("❌ 非登录页面，将跳过处理")
 	}
 
 	return isLogin, nil
 }
 
+// calculateLoginConfidence 计算登录页面置信度
+func (pd *PageDetector) calculateLoginConfidence(title, url, content string, ctx context.Context) float64 {
+	var confidence float64
+
+	// 标题权重: 30%
+	titleScore := pd.checkTitleFeatures(title)
+	confidence += titleScore * 0.3
+
+	// URL权重: 20%
+	urlScore := pd.checkURLFeatures(url)
+	confidence += urlScore * 0.2
+
+	// 内容权重: 25%
+	contentScore := pd.checkContentFeatures(content)
+	confidence += contentScore * 0.25
+
+	// 表单元素权重: 25%
+	formScore := pd.checkFormFeatures(ctx)
+	confidence += formScore * 0.25
+
+	return confidence
+}
+
+// checkTitleFeatures 检查标题特征
+func (pd *PageDetector) checkTitleFeatures(title string) float64 {
+	loginKeywords := []string{
+		"登录", "登陆", "login", "sign in", "log in", "signin",
+		"用户登录", "管理员登录", "后台登录", "系统登录",
+		"admin", "administration", "后台管理", "管理系统",
+		"auth", "authentication", "portal", "gateway",
+	}
+
+	title = strings.ToLower(title)
+	score := 0.0
+
+	for _, keyword := range loginKeywords {
+		if strings.Contains(title, strings.ToLower(keyword)) {
+			if strings.Contains(keyword, "login") || strings.Contains(keyword, "登录") {
+				score += 0.4 // 核心关键词更高权重
+			} else {
+				score += 0.2
+			}
+		}
+	}
+
+	if score > 1.0 {
+		score = 1.0
+	}
+
+	return score
+}
+
+// checkURLFeatures 检查URL特征
+func (pd *PageDetector) checkURLFeatures(url string) float64 {
+	urlPatterns := []string{
+		`(?i).*/login.*`,
+		`(?i).*/signin.*`,
+		`(?i).*/auth.*`,
+		`(?i).*/admin.*`,
+		`(?i).*/user.*`,
+		`(?i).*/portal.*`,
+		`(?i).*/sso.*`,
+		`(?i).*/oauth.*`,
+	}
+
+	score := 0.0
+	url = strings.ToLower(url)
+
+	for _, pattern := range urlPatterns {
+		if matched, _ := regexp.MatchString(pattern, url); matched {
+			score += 0.3
+		}
+	}
+
+	if score > 1.0 {
+		score = 1.0
+	}
+
+	return score
+}
+
+// checkContentFeatures 检查内容特征
+func (pd *PageDetector) checkContentFeatures(content string) float64 {
+	contentKeywords := map[string]float64{
+		"用户名":      0.15,
+		"密码":       0.15,
+		"username": 0.15,
+		"password": 0.15,
+		"登录":       0.1,
+		"login":    0.1,
+		"账号":       0.1,
+		"邮箱":       0.05,
+		"手机号":      0.05,
+		"验证码":      0.05,
+		"captcha":  0.05,
+		"记住我":      0.03,
+		"忘记密码":     0.03,
+		"注册":       -0.05, // 注册页面降低分数
+		"register": -0.05,
+	}
+
+	content = strings.ToLower(content)
+	score := 0.0
+
+	for keyword, weight := range contentKeywords {
+		if strings.Contains(content, strings.ToLower(keyword)) {
+			score += weight
+		}
+	}
+
+	if score > 1.0 {
+		score = 1.0
+	} else if score < 0 {
+		score = 0.0
+	}
+
+	return score
+}
+
+// checkFormFeatures 检查表单特征
+func (pd *PageDetector) checkFormFeatures(ctx context.Context) float64 {
+	score := 0.0
+
+	// 检查用户名输入框
+	usernameFound := pd.checkElementsExist(ctx, pd.config.GetUsernameSelectors())
+	if usernameFound {
+		score += 0.4
+	}
+
+	// 检查密码输入框
+	passwordFound := pd.checkElementsExist(ctx, pd.config.GetPasswordSelectors())
+	if passwordFound {
+		score += 0.4
+	}
+
+	// 检查提交按钮
+	submitFound := pd.checkElementsExist(ctx, pd.config.GetSubmitSelectors())
+	if submitFound {
+		score += 0.2
+	}
+
+	return score
+}
+
+// checkElementsExist 检查元素是否存在
+func (pd *PageDetector) checkElementsExist(ctx context.Context, selectors []string) bool {
+	for _, selector := range selectors {
+		var nodes []*cdp.Node
+		err := chromedp.Run(ctx, chromedp.Nodes(selector, &nodes))
+		if err == nil && len(nodes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // DetectLoginForm 检测登录表单元素
-func (d *PageDetector) DetectLoginForm() (*LoginFormElements, error) {
-	d.logger.Info("开始检测登录表单元素...")
+func (pd *PageDetector) DetectLoginForm() (*LoginFormElements, error) {
+	startTime := time.Now()
 
 	elements := &LoginFormElements{}
 
 	// 检测用户名输入框
-	usernameSelector, err := d.browser.FindElement(d.config.GetUsernameSelectors())
-	if err != nil {
-		return nil, fmt.Errorf("检测用户名输入框失败: %v", err)
-	}
-	if usernameSelector == "" {
-		d.logger.Warn("未找到用户名输入框")
-	} else {
+	usernameSelector, err := pd.browser.FindElement(pd.config.GetUsernameSelectors())
+	if err == nil && usernameSelector != "" {
 		elements.UsernameSelector = usernameSelector
-		d.logger.Infof("✓ 找到用户名输入框: %s", usernameSelector)
+		pd.logger.Debugf("✅ 发现用户名输入框: %s", usernameSelector)
+	} else {
+		pd.logger.Warn("⚠️ 未找到用户名输入框")
 	}
 
 	// 检测密码输入框
-	passwordSelector, err := d.browser.FindElement(d.config.GetPasswordSelectors())
-	if err != nil {
-		return nil, fmt.Errorf("检测密码输入框失败: %v", err)
-	}
-	if passwordSelector == "" {
-		d.logger.Warn("未找到密码输入框")
-	} else {
+	passwordSelector, err := pd.browser.FindElement(pd.config.GetPasswordSelectors())
+	if err == nil && passwordSelector != "" {
 		elements.PasswordSelector = passwordSelector
-		d.logger.Infof("✓ 找到密码输入框: %s", passwordSelector)
+		pd.logger.Debugf("✅ 发现密码输入框: %s", passwordSelector)
+	} else {
+		pd.logger.Warn("⚠️ 未找到密码输入框")
 	}
 
 	// 检测验证码
-	if d.config.Captcha.Detection.Enabled {
-		d.logger.Debug("🔍 开始智能验证码检测...")
-		detectedCaptcha, err := d.captchaDetector.DetectCaptcha()
-		if err == nil && detectedCaptcha != nil && detectedCaptcha.Type != CaptchaTypeNone {
-			elements.CaptchaInfo = detectedCaptcha
-			elements.CaptchaSelector = detectedCaptcha.Selector
-			elements.HasCaptcha = true
-			d.logger.Infof("🎯 检测到验证码: %s", detectedCaptcha.GetTypeName())
-			d.logger.Infof("📋 处理策略: %s", detectedCaptcha.GetHandlingStrategy())
-		}
-	}
+	captchaInfo, err := pd.captchaDetector.DetectCaptcha()
+	if err == nil && captchaInfo != nil && captchaInfo.Type != CaptchaTypeNone {
+		elements.HasCaptcha = true
+		elements.CaptchaInfo = captchaInfo
+		elements.CaptchaSelector = captchaInfo.Selector
 
-	// 如果智能检测没有找到，回退到传统方法
-	if !elements.HasCaptcha {
-		captchaSelector, err := d.browser.FindElement(d.config.GetCaptchaSelectors())
-		if err != nil {
-			d.logger.Warnf("检测验证码输入框时出错: %v", err)
-		}
-		if captchaSelector != "" {
+		// 如果有验证码输入框，也尝试找到它
+		if captchaSelector, err := pd.browser.FindElement(pd.config.GetCaptchaSelectors()); err == nil && captchaSelector != "" {
 			elements.CaptchaSelector = captchaSelector
-			elements.HasCaptcha = true
-			d.logger.Infof("✓ 通过传统方法找到验证码输入框: %s", captchaSelector)
-			// 创建简单的验证码信息
-			elements.CaptchaInfo = &CaptchaInfo{
-				Type:        CaptchaTypeText,
-				Selector:    captchaSelector,
-				Description: "传统验证码输入框",
-				Confidence:  0.6,
-			}
-		} else {
-			d.logger.Info("未检测到验证码")
 		}
 	}
 
 	// 检测提交按钮
-	submitSelector, err := d.browser.FindElement(d.config.GetSubmitSelectors())
-	if err != nil {
-		return nil, fmt.Errorf("检测提交按钮失败: %v", err)
-	}
-	if submitSelector == "" {
-		d.logger.Warn("未找到提交按钮")
-	} else {
+	submitSelector, err := pd.browser.FindElement(pd.config.GetSubmitSelectors())
+	if err == nil && submitSelector != "" {
 		elements.SubmitSelector = submitSelector
-		d.logger.Infof("✓ 找到提交按钮: %s", submitSelector)
+		pd.logger.Debugf("✅ 发现提交按钮: %s", submitSelector)
+	} else {
+		pd.logger.Warn("⚠️ 未找到提交按钮")
 	}
 
-	// 验证必要元素
-	if elements.UsernameSelector == "" || elements.PasswordSelector == "" || elements.SubmitSelector == "" {
-		return nil, fmt.Errorf("缺少关键登录元素")
-	}
+	detectTime := time.Since(startTime)
+	pd.logger.Debugf("表单元素检测完成，用时: %v", detectTime)
 
-	d.logger.Info("登录表单元素检测完成")
 	return elements, nil
 }
 
-// AnalyzePage 分析页面并给出详细报告
-func (d *PageDetector) AnalyzePage() (map[string]interface{}, error) {
-	title, url, content, err := d.browser.GetPageInfo()
-	if err != nil {
-		return nil, fmt.Errorf("获取页面信息失败: %v", err)
+// AnalyzePage 分析页面（增强版，包含源码）
+func (pd *PageDetector) AnalyzePage() (*PageAnalysis, error) {
+	startTime := time.Now()
+
+	analysis := &PageAnalysis{
+		DetectedFeatures: []string{},
+		ResponseHeaders:  make(map[string]string),
 	}
 
-	analysis := map[string]interface{}{
-		"title":    title,
-		"url":      url,
-		"is_login": d.config.IsLoginPage(title, url, content),
+	// 设置网络监听来获取响应头
+	ctx := pd.browser.GetContext()
+
+	// 启用网络域
+	if err := chromedp.Run(ctx, network.Enable()); err != nil {
+		pd.logger.Warnf("启用网络监听失败: %v", err)
 	}
 
-	// 检测各种表单元素
-	formElements := map[string]interface{}{}
-
-	// 用户名输入框
-	if usernameSelector, _ := d.browser.FindElement(d.config.GetUsernameSelectors()); usernameSelector != "" {
-		formElements["username"] = usernameSelector
-	}
-
-	// 密码输入框
-	if passwordSelector, _ := d.browser.FindElement(d.config.GetPasswordSelectors()); passwordSelector != "" {
-		formElements["password"] = passwordSelector
-	}
-
-	// 验证码输入框
-	if captchaSelector, _ := d.browser.FindElement(d.config.GetCaptchaSelectors()); captchaSelector != "" {
-		formElements["captcha"] = captchaSelector
-	}
-
-	// 提交按钮
-	if submitSelector, _ := d.browser.FindElement(d.config.GetSubmitSelectors()); submitSelector != "" {
-		formElements["submit"] = submitSelector
-	}
-
-	analysis["form_elements"] = formElements
-
-	// 检测页面特征
-	var features []string
-	if strings.Contains(strings.ToLower(content), "username") || strings.Contains(content, "用户名") {
-		features = append(features, "包含用户名字段")
-	}
-	if strings.Contains(strings.ToLower(content), "password") || strings.Contains(content, "密码") {
-		features = append(features, "包含密码字段")
-	}
-	if strings.Contains(strings.ToLower(content), "captcha") || strings.Contains(content, "验证码") {
-		features = append(features, "包含验证码")
-	}
-	if strings.Contains(strings.ToLower(content), "login") || strings.Contains(content, "登录") {
-		features = append(features, "包含登录文本")
-	}
-
-	analysis["page_features"] = features
-
-	// 检测验证码
-	if d.config.Captcha.Detection.Enabled {
-		captchaInfo, err := d.captchaDetector.DetectCaptcha()
-		if err == nil && captchaInfo != nil {
-			captchaAnalysis := map[string]interface{}{
-				"type":       captchaInfo.GetTypeName(),
-				"confidence": captchaInfo.Confidence,
-				"strategy":   captchaInfo.GetHandlingStrategy(),
-				"selector":   captchaInfo.Selector,
+	// 监听响应头
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *network.EventResponseReceived:
+			if strings.Contains(ev.Response.URL, "login") || ev.Type == network.ResourceTypeDocument {
+				for key, value := range ev.Response.Headers {
+					if key == "content-type" || key == "Content-Type" {
+						analysis.ResponseHeaders["content-type"] = fmt.Sprintf("%v", value)
+					}
+					if key == "content-encoding" || key == "Content-Encoding" {
+						analysis.ResponseHeaders["content-encoding"] = fmt.Sprintf("%v", value)
+					}
+				}
 			}
-			analysis["captcha_info"] = captchaAnalysis
+		}
+	})
+
+	// 等待页面完全加载
+	analyzeCtx, cancel := context.WithTimeout(ctx, pd.analysisTimeout)
+	defer cancel()
+
+	var title, url, content, pageSource string
+	err := chromedp.Run(analyzeCtx,
+		// 等待页面加载完成
+		chromedp.Sleep(2*time.Second),
+		// 获取基本信息
+		chromedp.Title(&title),
+		chromedp.Location(&url),
+		chromedp.Text("body", &content),
+		// 获取完整页面源码
+		chromedp.OuterHTML("html", &pageSource),
+	)
+
+	if err != nil {
+		analysis.ErrorMessage = fmt.Sprintf("获取页面信息失败: %v", err)
+		pd.logger.Errorf("页面分析失败: %v", err)
+		return analysis, err
+	}
+
+	// 检测页面编码
+	encoding := pd.detectEncoding(pageSource, analysis.ResponseHeaders)
+	analysis.Encoding = encoding
+
+	// 如果需要，转换编码
+	if encoding != "utf-8" && encoding != "UTF-8" {
+		if convertedSource, err := pd.convertEncoding(pageSource, encoding); err == nil {
+			pageSource = convertedSource
+			pd.logger.Debugf("页面编码已从 %s 转换为 UTF-8", encoding)
 		}
 	}
 
+	// 基本信息
+	analysis.Title = title
+	analysis.URL = url
+	analysis.PageSource = pageSource
+	analysis.LoadTime = time.Since(startTime)
+
+	// 登录页面检测
+	confidence := pd.calculateLoginConfidence(title, url, content, analyzeCtx)
+	analysis.Confidence = confidence
+	analysis.IsLogin = confidence >= 0.6
+
+	// 特征检测
+	if analysis.IsLogin {
+		analysis.DetectedFeatures = append(analysis.DetectedFeatures, "登录页面")
+	}
+
+	// 检测表单元素
+	if formElements, err := pd.DetectLoginForm(); err == nil {
+		analysis.FormElements = formElements
+
+		if formElements.UsernameSelector != "" {
+			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "用户名输入框")
+		}
+		if formElements.PasswordSelector != "" {
+			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "密码输入框")
+		}
+		if formElements.HasCaptcha {
+			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "验证码")
+		}
+		if formElements.SubmitSelector != "" {
+			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "提交按钮")
+		}
+	}
+
+	pd.logger.Infof("✅ 页面分析完成，用时: %v, 置信度: %.2f", analysis.LoadTime, analysis.Confidence)
+
 	return analysis, nil
+}
+
+// detectEncoding 检测页面编码
+func (pd *PageDetector) detectEncoding(pageSource string, headers map[string]string) string {
+	// 1. 从HTTP响应头检测
+	if contentType, exists := headers["content-type"]; exists {
+		if matched := regexp.MustCompile(`charset=([^;]+)`).FindStringSubmatch(contentType); len(matched) > 1 {
+			encoding := strings.TrimSpace(matched[1])
+			pd.logger.Debugf("从HTTP头检测到编码: %s", encoding)
+			return encoding
+		}
+	}
+
+	// 2. 从HTML meta标签检测
+	metaPatterns := []string{
+		`<meta\s+charset=["']?([^"'>\s]+)["']?`,
+		`<meta\s+http-equiv=["']?content-type["']?\s+content=["']?[^"']*charset=([^"'>\s]+)["']?`,
+		`<meta\s+content=["']?[^"']*charset=([^"'>\s]+)["']?\s+http-equiv=["']?content-type["']?`,
+	}
+
+	pageSourceLower := strings.ToLower(pageSource)
+	for _, pattern := range metaPatterns {
+		if matched := regexp.MustCompile(pattern).FindStringSubmatch(pageSourceLower); len(matched) > 1 {
+			encoding := strings.TrimSpace(matched[1])
+			pd.logger.Debugf("从HTML meta标签检测到编码: %s", encoding)
+			return encoding
+		}
+	}
+
+	// 3. 根据内容特征推测编码
+	if strings.Contains(pageSource, "中文") || strings.Contains(pageSource, "登录") {
+		if isGBK(pageSource) {
+			pd.logger.Debug("根据内容特征推测编码: GBK")
+			return "GBK"
+		}
+	}
+
+	// 4. 默认编码
+	pd.logger.Debug("使用默认编码: UTF-8")
+	return "UTF-8"
+}
+
+// isGBK 简单判断是否可能是GBK编码
+func isGBK(content string) bool {
+	// 通过字节模式简单判断
+	bytes := []byte(content)
+	gbkCount := 0
+	for i := 0; i < len(bytes)-1; i++ {
+		if bytes[i] >= 0x81 && bytes[i] <= 0xFE && bytes[i+1] >= 0x40 && bytes[i+1] <= 0xFE {
+			gbkCount++
+		}
+	}
+	return gbkCount > len(bytes)/20 // 如果GBK特征字节超过5%
+}
+
+// convertEncoding 转换编码
+func (pd *PageDetector) convertEncoding(content, fromEncoding string) (string, error) {
+	fromEncoding = strings.ToUpper(fromEncoding)
+
+	switch fromEncoding {
+	case "GBK", "GB2312", "GB18030":
+		if decoder := simplifiedchinese.GBK.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	case "BIG5":
+		if decoder := traditionalchinese.Big5.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	case "SHIFT_JIS", "SHIFT-JIS":
+		if decoder := japanese.ShiftJIS.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	case "ISO-2022-JP":
+		if decoder := japanese.ISO2022JP.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	case "EUC-KR":
+		if decoder := korean.EUCKR.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	case "ISO-8859-1", "LATIN1":
+		if decoder := charmap.ISO8859_1.NewDecoder(); decoder != nil {
+			result, err := decoder.String(content)
+			if err == nil {
+				return result, nil
+			}
+		}
+	default:
+		return content, fmt.Errorf("不支持的编码: %s", fromEncoding)
+	}
+
+	// 如果转换失败，返回原内容
+	return content, nil
 }

@@ -70,16 +70,23 @@ func (b *BruteForceEngine) ExecuteBruteForce(targetURL string) (*BruteForceResul
 	// 检测是否为登录页面
 	isLogin, err := b.detector.IsLoginPage()
 	if err != nil {
-		return nil, fmt.Errorf("检测登录页面失败: %v", err)
-	}
-
-	if !isLogin {
 		return &BruteForceResult{
 			Success:      false,
-			ErrorMessage: "目标页面不是登录页面",
+			ErrorMessage: fmt.Sprintf("检测登录页面失败: %v", err),
 			URL:          targetURL,
 		}, nil
 	}
+
+	if !isLogin {
+		b.logger.Warn("🚫 检测到非登录页面，自动跳过该URL")
+		return &BruteForceResult{
+			Success:      false,
+			ErrorMessage: "目标页面不是登录页面，已自动跳过",
+			URL:          targetURL,
+		}, nil
+	}
+
+	b.logger.Info("✅ 确认为登录页面，继续执行爆破")
 
 	// 检测登录表单元素
 	formElements, err := b.detector.DetectLoginForm()
@@ -91,6 +98,35 @@ func (b *BruteForceEngine) ExecuteBruteForce(targetURL string) (*BruteForceResul
 		}, nil
 	}
 
+	// 验证必要的表单元素
+	if formElements.UsernameSelector == "" {
+		b.logger.Warn("⚠️ 未找到用户名输入框")
+		return &BruteForceResult{
+			Success:      false,
+			ErrorMessage: "未找到用户名输入框，无法执行爆破",
+			URL:          targetURL,
+		}, nil
+	}
+
+	if formElements.PasswordSelector == "" {
+		b.logger.Warn("⚠️ 未找到密码输入框")
+		return &BruteForceResult{
+			Success:      false,
+			ErrorMessage: "未找到密码输入框，无法执行爆破",
+			URL:          targetURL,
+		}, nil
+	}
+
+	if formElements.SubmitSelector == "" {
+		b.logger.Warn("⚠️ 未找到提交按钮")
+		return &BruteForceResult{
+			Success:      false,
+			ErrorMessage: "未找到提交按钮，无法执行爆破",
+			URL:          targetURL,
+		}, nil
+	}
+
+	// 处理验证码
 	if formElements.HasCaptcha {
 		captchaMsg := "检测到验证码"
 		if formElements.CaptchaInfo != nil {
@@ -124,6 +160,14 @@ func (b *BruteForceEngine) ExecuteBruteForce(targetURL string) (*BruteForceResul
 
 	// 获取凭据列表
 	credentials := b.config.GetCredentials()
+	if len(credentials) == 0 {
+		return &BruteForceResult{
+			Success:      false,
+			ErrorMessage: "没有可用的用户名密码组合",
+			URL:          targetURL,
+		}, nil
+	}
+
 	b.logger.Info(fmt.Sprintf("开始尝试 %d 组用户名密码组合", len(credentials)))
 
 	// 创建进度条并设置到状态显示器

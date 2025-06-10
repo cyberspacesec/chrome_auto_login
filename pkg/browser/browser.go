@@ -32,7 +32,6 @@ func NewBrowser(cfg *config.Config, logger *logrus.Logger) *Browser {
 // Start 启动浏览器
 func (b *Browser) Start() error {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
 		chromedp.Flag("headless", b.config.Browser.Headless),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -46,16 +45,22 @@ func (b *Browser) Start() error {
 		chromedp.WindowSize(b.config.Browser.Width, b.config.Browser.Height),
 	)
 
+	// 如果指定了Chrome路径，使用自定义路径
+	if b.config.Browser.ChromePath != "" {
+		opts = append(opts, chromedp.ExecPath(b.config.Browser.ChromePath))
+		b.logger.Info("使用指定的Chrome路径: %s", b.config.Browser.ChromePath)
+	}
+
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	
+
 	// 创建自定义日志函数，过滤Chrome内部错误
 	customLogf := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
 		// 过滤掉Chrome内部的错误信息
 		if strings.Contains(msg, "could not unmarshal event") ||
-		   strings.Contains(msg, "cookiePart") ||
-		   strings.Contains(msg, "unknown ClientNavigationReason") ||
-		   strings.Contains(msg, "parse error") {
+			strings.Contains(msg, "cookiePart") ||
+			strings.Contains(msg, "unknown ClientNavigationReason") ||
+			strings.Contains(msg, "parse error") {
 			return // 忽略这些内部错误
 		}
 		// 只在debug模式下输出其他Chrome日志
@@ -66,7 +71,7 @@ func (b *Browser) Start() error {
 
 	// 统一使用自定义日志函数
 	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(customLogf))
-	
+
 	if !b.config.Browser.Headless {
 		b.logger.Debug("🔍 调试模式：Chrome窗口可见，已屏蔽内部错误日志")
 	}
@@ -88,10 +93,15 @@ func (b *Browser) Close() {
 	}
 }
 
+// GetContext 获取浏览器上下文
+func (b *Browser) GetContext() context.Context {
+	return b.ctx
+}
+
 // NavigateTo 导航到指定URL
 func (b *Browser) NavigateTo(url string) error {
 	b.logger.Infof("导航到: %s", url)
-	
+
 	timeoutCtx, cancel := context.WithTimeout(b.ctx, time.Duration(b.config.Browser.Timeout)*time.Second)
 	defer cancel()
 
@@ -111,7 +121,7 @@ func (b *Browser) GetPageInfo() (title, url, content string, err error) {
 		chromedp.Location(&url),
 		chromedp.Text("body", &content, chromedp.ByQuery),
 	)
-	
+
 	return title, url, content, err
 }
 
@@ -124,7 +134,7 @@ func (b *Browser) GetPageContent() (string, error) {
 	err := chromedp.Run(timeoutCtx,
 		chromedp.Text("body", &content, chromedp.ByQuery),
 	)
-	
+
 	return content, err
 }
 
@@ -138,20 +148,20 @@ func (b *Browser) FindElement(selectors []string) (string, error) {
 		err := chromedp.Run(timeoutCtx,
 			chromedp.Nodes(selector, &nodes, chromedp.AtLeast(0)),
 		)
-		
+
 		if err == nil && len(nodes) > 0 {
 			b.logger.Debugf("找到元素: %s", selector)
 			return selector, nil
 		}
 	}
-	
+
 	return "", nil
 }
 
 // FillInput 填充输入框
 func (b *Browser) FillInput(selector, value string) error {
 	b.logger.Debugf("🖊️  填充输入框 %s: %s", selector, value)
-	
+
 	timeoutCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
 	defer cancel()
 
@@ -174,7 +184,7 @@ func (b *Browser) FillInput(selector, value string) error {
 		chromedp.SendKeys(selector, value),
 		chromedp.Sleep(500*time.Millisecond), // 确保输入完成
 	)
-	
+
 	if err == nil {
 		// 验证输入是否成功
 		if err := b.verifyInput(selector, value); err != nil {
@@ -183,7 +193,7 @@ func (b *Browser) FillInput(selector, value string) error {
 			b.logger.Debugf("✅ 成功填充输入框: %s", selector)
 		}
 	}
-	
+
 	return err
 }
 
@@ -196,23 +206,23 @@ func (b *Browser) verifyInput(selector, expectedValue string) error {
 	err := chromedp.Run(timeoutCtx,
 		chromedp.Value(selector, &actualValue, chromedp.ByQuery),
 	)
-	
+
 	if err != nil {
 		return fmt.Errorf("获取输入框值失败: %v", err)
 	}
-	
+
 	if actualValue != expectedValue {
 		b.logger.Debugf("输入验证: 期望='%s', 实际='%s'", expectedValue, actualValue)
 		return fmt.Errorf("输入值不匹配: 期望='%s', 实际='%s'", expectedValue, actualValue)
 	}
-	
+
 	return nil
 }
 
 // ClickElement 点击元素
 func (b *Browser) ClickElement(selector string) error {
 	b.logger.Debugf("🖱️  点击元素: %s", selector)
-	
+
 	timeoutCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
 	defer cancel()
 
@@ -223,7 +233,7 @@ func (b *Browser) ClickElement(selector string) error {
 		chromedp.Click(selector, chromedp.ByQuery),
 		chromedp.Sleep(200*time.Millisecond),
 	)
-	
+
 	if err != nil {
 		// 如果普通点击失败，尝试JavaScript点击
 		b.logger.Debugf("普通点击失败，尝试JavaScript点击...")
@@ -238,11 +248,11 @@ func (b *Browser) ClickElement(selector string) error {
 			`, escapeJSString(selector)), nil),
 		)
 	}
-	
+
 	if err == nil {
 		b.logger.Debugf("✅ 成功点击元素: %s", selector)
 	}
-	
+
 	return err
 }
 
@@ -275,4 +285,4 @@ func escapeJSString(s string) string {
 	s = strings.ReplaceAll(s, "\r", "\\r")
 	s = strings.ReplaceAll(s, "\t", "\\t")
 	return s
-} 
+}

@@ -1,0 +1,14 @@
+# 测试用户名列表
+admin
+test
+administrator
+root
+test
+demo
+guest
+user
+operator
+manager
+# 更多用户名
+sa
+dba 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -80,11 +81,16 @@ func showWelcomeBanner() {
 func main() {
 	// 命令行参数
 	var (
-		configFile = flag.String("config", "config/config.yaml", "配置文件路径")
-		targetURL  = flag.String("url", "", "目标登录页面URL")
-		analyze    = flag.Bool("analyze", false, "仅分析页面，不执行爆破")
-		debug      = flag.Bool("debug", false, "调试模式，显示浏览器窗口和详细操作过程")
-		help       = flag.Bool("help", false, "显示帮助信息")
+		configFile   = flag.String("config", "config/config.yaml", "配置文件路径")
+		targetURL    = flag.String("url", "", "目标登录页面URL")
+		urlFile      = flag.String("f", "", "从文件读取URL列表，一行一个URL")
+		fileAlias    = flag.String("file", "", "从文件读取URL列表（-f的别名）")
+		usernameFile = flag.String("username", "", "从文件读取用户名列表，一行一个用户名")
+		passwordFile = flag.String("password", "", "从文件读取密码列表，一行一个密码")
+		chromePath   = flag.String("path", "", "Chrome浏览器可执行文件路径（可选，不指定则自动检测）")
+		analyze      = flag.Bool("analyze", false, "仅分析页面，不执行爆破")
+		debug        = flag.Bool("debug", false, "调试模式，显示浏览器窗口和详细操作过程")
+		help         = flag.Bool("help", false, "显示帮助信息")
 	)
 	flag.Parse()
 
@@ -93,8 +99,14 @@ func main() {
 		return
 	}
 
-	if *targetURL == "" {
-		fmt.Println("错误: 必须指定目标URL")
+	// 处理file参数的别名
+	if *fileAlias != "" && *urlFile == "" {
+		*urlFile = *fileAlias
+	}
+
+	// 验证参数
+	if *targetURL == "" && *urlFile == "" {
+		fmt.Println("错误: 必须指定目标URL (-url) 或URL文件 (-f/-file)")
 		fmt.Println("使用 -help 查看帮助信息")
 		os.Exit(1)
 	}
@@ -104,6 +116,33 @@ func main() {
 	if err != nil {
 		fmt.Printf("加载配置文件失败: %v\n", err)
 		os.Exit(1)
+	}
+
+	// 如果指定了Chrome路径，设置到配置中
+	if *chromePath != "" {
+		cfg.Browser.ChromePath = *chromePath
+		fmt.Printf("✅ 使用指定的Chrome路径: %s\n", *chromePath)
+	}
+
+	// 从文件加载用户名和密码（如果指定）
+	if *usernameFile != "" {
+		usernames, err := readFileLines(*usernameFile)
+		if err != nil {
+			fmt.Printf("读取用户名文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.Bruteforce.Usernames = usernames
+		fmt.Printf("✅ 从文件加载了 %d 个用户名\n", len(usernames))
+	}
+
+	if *passwordFile != "" {
+		passwords, err := readFileLines(*passwordFile)
+		if err != nil {
+			fmt.Printf("读取密码文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.Bruteforce.Passwords = passwords
+		fmt.Printf("✅ 从文件加载了 %d 个密码\n", len(passwords))
 	}
 
 	// 如果启用debug模式，强制使用可视化浏览器和详细日志
@@ -155,49 +194,99 @@ func main() {
 	// 创建页面检测器
 	pageDetector := detector.NewPageDetector(browserInstance, cfg, util.Logger)
 
-	// 导航到目标URL
-	if err := browserInstance.NavigateTo(*targetURL); err != nil {
-		util.LogError(fmt.Sprintf("导航到目标URL失败: %v", err))
-		os.Exit(1)
-	}
-
-	// 如果只是分析模式
-	if *analyze {
-		util.LogInfo("=== 页面分析模式 ===")
-
-		// 分析页面
-		analysis, err := pageDetector.AnalyzePage()
+	// 获取URL列表
+	urls := []string{}
+	if *urlFile != "" {
+		fileUrls, err := readFileLines(*urlFile)
 		if err != nil {
-			util.LogError(fmt.Sprintf("页面分析失败: %v", err))
+			util.LogError(fmt.Sprintf("读取URL文件失败: %v", err))
 			os.Exit(1)
 		}
-
-		// 输出分析结果
-		printAnalysisResult(analysis)
-		return
+		urls = fileUrls
+		fmt.Printf("✅ 从文件加载了 %d 个URL\n", len(urls))
+	} else {
+		urls = []string{*targetURL}
 	}
 
-	// 创建状态显示器和进度感知日志器
-	statusDisplay := util.NewStatusDisplay()
-	progressLogger := util.NewProgressAwareLogger(statusDisplay)
+	// 处理每个URL
+	for i, url := range urls {
+		if len(urls) > 1 {
+			fmt.Printf("\n" + strings.Repeat("=", 70))
+			fmt.Printf("\n🎯 处理第 %d/%d 个URL: %s\n", i+1, len(urls), url)
+			fmt.Println(strings.Repeat("=", 70))
+		}
 
-	// 创建爆破引擎
-	bruteforceEngine := bruteforce.NewBruteForceEngine(browserInstance, pageDetector, cfg, progressLogger)
+		// 导航到目标URL
+		if err := browserInstance.NavigateTo(url); err != nil {
+			util.LogError(fmt.Sprintf("导航到目标URL失败: %v", err))
+			continue
+		}
 
-	// 显示爆破信息
-	fmt.Println("\n" + strings.Repeat("=", 70))
-	fmt.Println("🎯 自动化登录爆破即将开始")
-	fmt.Println(strings.Repeat("=", 70))
+		// 如果只是分析模式
+		if *analyze {
+			util.LogInfo("=== 页面分析模式 ===")
 
-	// 执行爆破
-	result, err := bruteforceEngine.ExecuteBruteForce(*targetURL)
+			// 分析页面
+			analysis, err := pageDetector.AnalyzePage()
+			if err != nil {
+				util.LogError(fmt.Sprintf("页面分析失败: %v", err))
+				continue
+			}
+
+			// 输出分析结果
+			printAnalysisResult(analysis)
+			continue
+		}
+
+		// 创建状态显示器和进度感知日志器
+		statusDisplay := util.NewStatusDisplay()
+		progressLogger := util.NewProgressAwareLogger(statusDisplay)
+
+		// 创建爆破引擎
+		bruteforceEngine := bruteforce.NewBruteForceEngine(browserInstance, pageDetector, cfg, progressLogger)
+
+		// 显示爆破信息
+		if len(urls) == 1 {
+			fmt.Println("\n" + strings.Repeat("=", 70))
+			fmt.Println("🎯 自动化登录爆破即将开始")
+			fmt.Println(strings.Repeat("=", 70))
+		}
+
+		// 执行爆破
+		result, err := bruteforceEngine.ExecuteBruteForce(url)
+		if err != nil {
+			util.LogError(fmt.Sprintf("爆破执行失败: %v", err))
+			continue
+		}
+
+		// 输出结果
+		printBruteForceResult(result)
+	}
+}
+
+// readFileLines 从文件中读取行，去除空行和注释
+func readFileLines(filename string) ([]string, error) {
+	file, err := os.Open(filename)
 	if err != nil {
-		util.LogError(fmt.Sprintf("爆破执行失败: %v", err))
-		os.Exit(1)
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// 跳过空行和注释行
+		if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "//") {
+			lines = append(lines, line)
+		}
 	}
 
-	// 输出结果
-	printBruteForceResult(result)
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return lines, nil
 }
 
 func showHelp() {
@@ -209,17 +298,29 @@ func showHelp() {
 
 	fmt.Println("用法:")
 	fmt.Println("  ./chrome_auto_login -url <目标URL> [选项]")
+	fmt.Println("  ./chrome_auto_login -f <URL文件> [选项]")
 	fmt.Println()
 	fmt.Println("选项:")
-	fmt.Println("  -url string      目标登录页面URL (必需)")
-	fmt.Println("  -config string   配置文件路径 (默认: config/config.yaml)")
-	fmt.Println("  -analyze         仅分析页面，不执行爆破")
-	fmt.Println("  -debug           调试模式，显示浏览器窗口和详细操作过程")
-	fmt.Println("  -help            显示此帮助信息")
+	fmt.Println("  -url string        目标登录页面URL (与-f/-file二选一)")
+	fmt.Println("  -f string          从文件读取URL列表，一行一个URL (与-url二选一)")
+	fmt.Println("  -file string       -f的别名，从文件读取URL列表")
+	fmt.Println("  -username string   从文件读取用户名列表，一行一个用户名")
+	fmt.Println("  -password string   从文件读取密码列表，一行一个密码")
+	fmt.Println("  -path string       Chrome浏览器可执行文件路径（可选，不指定则自动检测）")
+	fmt.Println("  -config string     配置文件路径 (默认: config/config.yaml)")
+	fmt.Println("  -analyze           仅分析页面，不执行爆破")
+	fmt.Println("  -debug             调试模式，显示浏览器窗口和详细操作过程")
+	fmt.Println("  -help              显示此帮助信息")
 	fmt.Println()
 	fmt.Println("示例:")
 	fmt.Println("  # 基本用法")
 	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\"")
+	fmt.Println()
+	fmt.Println("  # 从文件读取URL列表")
+	fmt.Println("  ./chrome_auto_login -f urls.txt")
+	fmt.Println()
+	fmt.Println("  # 使用自定义用户名和密码字典")
+	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\" -username users.txt -password passwords.txt")
 	fmt.Println()
 	fmt.Println("  # 调试模式（显示浏览器窗口）")
 	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\" -debug")
@@ -227,13 +328,24 @@ func showHelp() {
 	fmt.Println("  # 使用自定义配置文件")
 	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\" -config \"my_config.yaml\"")
 	fmt.Println()
+	fmt.Println("  # 指定Chrome浏览器路径")
+	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\" -path \"/path/to/chrome\"")
+	fmt.Println()
 	fmt.Println("  # 仅分析页面")
 	fmt.Println("  ./chrome_auto_login -url \"http://example.com/login\" -analyze")
+	fmt.Println()
+	fmt.Println("文件格式:")
+	fmt.Println("  - URL文件: 每行一个URL")
+	fmt.Println("  - 用户名文件: 每行一个用户名")
+	fmt.Println("  - 密码文件: 每行一个密码")
+	fmt.Println("  - 支持 # 和 // 开头的注释行")
+	fmt.Println("  - 自动忽略空行")
 	fmt.Println()
 	fmt.Println("注意:")
 	fmt.Println("  - 此工具仅用于授权测试，请勿用于非法用途")
 	fmt.Println("  - 确保已安装Chrome浏览器")
 	fmt.Println("  - 配置文件中可以自定义识别规则和字典")
+	fmt.Println("  - 支持OCR验证码识别和多种验证码类型检测")
 	fmt.Println()
 	fmt.Println("🌐 项目地址: https://github.com/cyberspacesec/chrome_auto_login")
 	fmt.Println("📧 联系作者: zhizhuo@cyberspacesec.com")
@@ -241,41 +353,72 @@ func showHelp() {
 	fmt.Println()
 }
 
-func printAnalysisResult(analysis map[string]interface{}) {
+func printAnalysisResult(analysis *detector.PageAnalysis) {
 	util.LogInfo("=== 页面分析结果 ===")
-	util.LogInfo(fmt.Sprintf("页面标题: %v", analysis["title"]))
-	util.LogInfo(fmt.Sprintf("页面URL: %v", analysis["url"]))
-	util.LogInfo(fmt.Sprintf("是否为登录页面: %v", analysis["is_login"]))
+	util.LogInfo(fmt.Sprintf("页面标题: %s", analysis.Title))
+	util.LogInfo(fmt.Sprintf("页面URL: %s", analysis.URL))
+	util.LogInfo(fmt.Sprintf("是否为登录页面: %t (置信度: %.2f)", analysis.IsLogin, analysis.Confidence))
+	util.LogInfo(fmt.Sprintf("页面编码: %s", analysis.Encoding))
+	util.LogInfo(fmt.Sprintf("分析用时: %v", analysis.LoadTime))
 
-	if formElements, ok := analysis["form_elements"].(map[string]interface{}); ok {
-		util.LogInfo("检测到的表单元素:")
-		for elementType, selector := range formElements {
-			util.LogInfo(fmt.Sprintf("  %s: %v", elementType, selector))
+	// 显示响应头信息
+	if len(analysis.ResponseHeaders) > 0 {
+		util.LogInfo("响应头信息:")
+		for key, value := range analysis.ResponseHeaders {
+			util.LogInfo(fmt.Sprintf("  %s: %s", key, value))
 		}
 	}
 
-	// 显示验证码检测结果
-	if captchaInfo, ok := analysis["captcha_info"].(map[string]interface{}); ok {
-		util.LogInfo("验证码检测结果:")
-		if captchaType, exists := captchaInfo["type"]; exists {
-			util.LogInfo(fmt.Sprintf("  🎯 类型: %s", captchaType))
-		}
-		if confidence, exists := captchaInfo["confidence"]; exists {
-			util.LogInfo(fmt.Sprintf("  📊 置信度: %.2f", confidence))
-		}
-		if strategy, exists := captchaInfo["strategy"]; exists {
-			util.LogInfo(fmt.Sprintf("  📋 处理策略: %s", strategy))
-		}
-		if selector, exists := captchaInfo["selector"]; exists && selector != "" {
-			util.LogInfo(fmt.Sprintf("  🎯 选择器: %s", selector))
-		}
-	}
-
-	if features, ok := analysis["page_features"].([]string); ok {
-		util.LogInfo("页面特征:")
-		for _, feature := range features {
+	// 显示检测到的特征
+	if len(analysis.DetectedFeatures) > 0 {
+		util.LogInfo("检测到的页面特征:")
+		for _, feature := range analysis.DetectedFeatures {
 			util.LogInfo(fmt.Sprintf("  • %s", feature))
 		}
+	}
+
+	// 显示表单元素
+	if analysis.FormElements != nil {
+		util.LogInfo("检测到的表单元素:")
+		if analysis.FormElements.UsernameSelector != "" {
+			util.LogInfo(fmt.Sprintf("  用户名输入框: %s", analysis.FormElements.UsernameSelector))
+		}
+		if analysis.FormElements.PasswordSelector != "" {
+			util.LogInfo(fmt.Sprintf("  密码输入框: %s", analysis.FormElements.PasswordSelector))
+		}
+		if analysis.FormElements.CaptchaSelector != "" {
+			util.LogInfo(fmt.Sprintf("  验证码输入框: %s", analysis.FormElements.CaptchaSelector))
+		}
+		if analysis.FormElements.SubmitSelector != "" {
+			util.LogInfo(fmt.Sprintf("  提交按钮: %s", analysis.FormElements.SubmitSelector))
+		}
+
+		// 显示验证码检测结果
+		if analysis.FormElements.HasCaptcha && analysis.FormElements.CaptchaInfo != nil {
+			captcha := analysis.FormElements.CaptchaInfo
+			util.LogInfo("验证码检测结果:")
+			util.LogInfo(fmt.Sprintf("  🎯 类型: %s", captcha.GetTypeName()))
+			util.LogInfo(fmt.Sprintf("  📊 置信度: %.2f", captcha.Confidence))
+			util.LogInfo(fmt.Sprintf("  📋 处理策略: %s", captcha.GetHandlingStrategy()))
+			if captcha.Selector != "" {
+				util.LogInfo(fmt.Sprintf("  🎯 选择器: %s", captcha.Selector))
+			}
+			if captcha.ImageURL != "" {
+				util.LogInfo(fmt.Sprintf("  🖼️ 图片URL: %s", captcha.ImageURL))
+			}
+		}
+	}
+
+	// 显示页面源码（如果需要的话）
+	if analysis.PageSource != "" {
+		util.LogInfo("\n=== 页面源码 ===")
+		fmt.Println(analysis.PageSource)
+		util.LogInfo("=== 页面源码结束 ===")
+	}
+
+	// 显示错误信息
+	if analysis.ErrorMessage != "" {
+		util.LogError(fmt.Sprintf("分析过程中出现错误: %s", analysis.ErrorMessage))
 	}
 }
 

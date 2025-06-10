@@ -1,9 +1,10 @@
 # Chrome自动化登录爆破配置文件
 browser:
-  headless: true   # 是否无头模式
-  timeout: 60      # 页面加载超时时间(秒)
-  width: 1920      # 浏览器窗口宽度
-  height: 1080     # 浏览器窗口高度
+  headless: true     # 是否无头模式
+  timeout: 60        # 页面加载超时时间(秒)
+  width: 1920        # 浏览器窗口宽度
+  height: 1080       # 浏览器窗口高度
+  chrome_path: ""    # Chrome浏览器可执行文件路径（可选，空字符串表示自动检测）
 
 # 登录页面识别规则
 login_page_detection:
@@ -216,6 +217,7 @@ captcha:
     enabled: true                    # 是否启用验证码检测
     timeout: 10                      # 检测超时时间(秒)
     confidence_threshold: 0.7        # 检测置信度阈值
+    verbose_output: true             # 是否输出详细的验证码检测信息
     
   # 验证码处理策略
   handling:
@@ -223,34 +225,110 @@ captcha:
     manual_input: false              # 是否支持人工输入
     ocr_enabled: false               # 是否启用OCR识别
     
-  # OCR配置 (未来扩展)
+  # OCR配置
   ocr:
-    provider: "tesseract"            # OCR提供商: tesseract, baidu, ali
-    api_key: ""                      # API密钥
-    timeout: 30                      # OCR识别超时(秒)
+    # 主要OCR提供商配置
+    primary_provider: "tesseract"    # 主要OCR提供商: tesseract, baidu, aliyun, tencent, local
     
+    # 备用OCR提供商（主要提供商失败时使用）
+    fallback_providers: 
+      - "local"
+      - "tesseract"
+    
+    # 通用OCR配置
+    timeout: 30                      # OCR识别超时(秒)
+    max_retries: 3                   # 最大重试次数
+    retry_delay: 2                   # 重试间隔(秒)
+    
+    # 图像预处理配置
+    preprocessing:
+      enabled: true                  # 是否启用图像预处理
+      resize_enabled: true           # 是否调整图像大小
+      resize_width: 200              # 调整后的宽度(像素)
+      resize_height: 80              # 调整后的高度(像素)
+      grayscale: true                # 是否转为灰度图
+      noise_reduction: true          # 是否降噪
+      contrast_enhancement: true     # 是否增强对比度
+      binary_threshold: 128          # 二值化阈值(0-255)
+      
+    # Tesseract配置
+    tesseract:
+      executable_path: ""            # Tesseract可执行文件路径(空为自动检测)
+      language: "eng+chi_sim"        # 识别语言: eng(英文), chi_sim(简体中文), chi_tra(繁体中文)
+      page_seg_mode: 8               # 页面分割模式: 6(单一文本块), 7(单行文本), 8(单词), 13(原始行)
+      char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"  # 字符白名单
+      
+    # 百度OCR配置
+    baidu:
+      app_id: ""                     # 百度AI开放平台APP ID
+      api_key: ""                    # 百度AI开放平台API Key  
+      secret_key: ""                 # 百度AI开放平台Secret Key
+      api_url: "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic"  # API地址
+      
+    # 阿里云OCR配置
+    aliyun:
+      access_key_id: ""              # 阿里云Access Key ID
+      access_key_secret: ""          # 阿里云Access Key Secret
+      region: "cn-hangzhou"          # 地域
+      endpoint: "ocr.cn-hangzhou.aliyuncs.com"  # 服务端点
+      
+    # 腾讯云OCR配置
+    tencent:
+      secret_id: ""                  # 腾讯云Secret ID
+      secret_key: ""                 # 腾讯云Secret Key
+      region: "ap-beijing"           # 地域
+      endpoint: "ocr.tencentcloudapi.com"  # 服务端点
+      
+    # 本地机器学习模型配置
+    local:
+      model_path: "models/captcha_model.h5"  # 模型文件路径
+      enabled: false                 # 是否启用本地模型
+      confidence_threshold: 0.8      # 置信度阈值
+      
   # 滑块验证码配置
   slider:
-    enabled: false                   # 是否启用滑块处理
+    enabled: true                    # 是否启用滑块处理
     simulate_human: true             # 是否模拟人类行为
     drag_speed: 100                  # 拖拽速度(像素/秒)
+    random_delay: true               # 是否随机延迟
+    min_delay: 500                   # 最小延迟(毫秒)
+    max_delay: 2000                  # 最大延迟(毫秒)
+    
+  # 点击验证码配置
+  click:
+    enabled: true                    # 是否启用点击验证码处理
+    click_delay: 500                 # 点击间隔(毫秒)
+    max_attempts: 3                  # 最大尝试次数
     
   # 自定义验证码选择器
   custom_selectors:
     # 验证码图片选择器
     image_selectors:
       - "img[src*='captcha']"
+      - "img[src*='verify']"
+      - "img[src*='vcode']"
       - "img[alt*='验证码']"
+      - "img[alt*='captcha']"
       - ".captcha-img"
+      - ".verify-img"
+      - "#captcha_img"
+      - "#verify_img"
     
     # 验证码输入框选择器  
     input_selectors:
       - "input[placeholder*='验证码']"
       - "input[name*='captcha']"
+      - "input[name*='verify']"
+      - "input[name*='code']"
       - "#captcha_code"
+      - "#verify_code"
+      - ".captcha-input"
     
     # 滑块选择器
     slider_selectors:
       - ".slider-captcha"
+      - ".slide-captcha"
       - ".geetest_slider"
-      - ".nc_iconfont" 
+      - ".nc_iconfont"
+      - ".yidun_slider"
+      - "[class*='slider'][class*='verify']" 

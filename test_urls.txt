@@ -1,0 +1,6 @@
+# 测试URL列表 - 仅用于授权测试
+# 这是一个注释行
+http://testphp.vulnweb.com/login.php
+
+// 这也是注释行  
+# 更多测试URL可以添加到这里 
