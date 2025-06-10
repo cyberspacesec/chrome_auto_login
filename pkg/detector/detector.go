@@ -27,7 +27,9 @@ type LoginFormElements struct {
 	PasswordSelector string       `json:"password_selector"`
 	CaptchaSelector  string       `json:"captcha_selector"`
 	SubmitSelector   string       `json:"submit_selector"`
+	CheckboxSelector string       `json:"checkbox_selector"`
 	HasCaptcha       bool         `json:"has_captcha"`
+	HasCheckbox      bool         `json:"has_checkbox"`
 	CaptchaInfo      *CaptchaInfo `json:"captcha_info"`
 }
 
@@ -310,6 +312,14 @@ func (pd *PageDetector) DetectLoginForm() (*LoginFormElements, error) {
 		}
 	}
 
+	// 检测复选框（如用户协议）
+	checkboxSelector, err := pd.browser.FindElement(pd.config.GetCheckboxSelectors())
+	if err == nil && checkboxSelector != "" {
+		elements.CheckboxSelector = checkboxSelector
+		elements.HasCheckbox = true
+		pd.logger.Debugf("✅ 发现复选框: %s", checkboxSelector)
+	}
+
 	// 检测提交按钮
 	submitSelector, err := pd.browser.FindElement(pd.config.GetSubmitSelectors())
 	if err == nil && submitSelector != "" {
@@ -421,6 +431,9 @@ func (pd *PageDetector) AnalyzePage() (*PageAnalysis, error) {
 		}
 		if formElements.HasCaptcha {
 			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "验证码")
+		}
+		if formElements.HasCheckbox {
+			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "用户协议复选框")
 		}
 		if formElements.SubmitSelector != "" {
 			analysis.DetectedFeatures = append(analysis.DetectedFeatures, "提交按钮")

@@ -42,6 +42,17 @@ func (b *Browser) Start() error {
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
+		// SSL证书相关配置 - 忽略证书错误
+		chromedp.Flag("ignore-certificate-errors", true),
+		chromedp.Flag("ignore-ssl-errors", true),
+		chromedp.Flag("ignore-certificate-errors-spki-list", true),
+		chromedp.Flag("ignore-certificate-errors-ssl-errors", true),
+		chromedp.Flag("allow-running-insecure-content", true),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("allow-cross-origin-auth-prompt", true),
+		// 网络相关配置
+		chromedp.Flag("disable-features", "VizDisplayCompositor"),
+		chromedp.Flag("disable-ipc-flooding-protection", true),
 		chromedp.WindowSize(b.config.Browser.Width, b.config.Browser.Height),
 	)
 
@@ -96,6 +107,26 @@ func (b *Browser) Close() {
 // GetContext 获取浏览器上下文
 func (b *Browser) GetContext() context.Context {
 	return b.ctx
+}
+
+// GetInputValue 获取输入框的当前值
+func (b *Browser) GetInputValue(selector string) (string, error) {
+	b.logger.Debugf("🔍 获取输入框值: %s", selector)
+
+	timeoutCtx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
+	defer cancel()
+
+	var value string
+	err := chromedp.Run(timeoutCtx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.Value(selector, &value, chromedp.ByQuery),
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("获取输入框值失败: %v", err)
+	}
+
+	return value, nil
 }
 
 // NavigateTo 导航到指定URL
@@ -162,35 +193,190 @@ func (b *Browser) FindElement(selectors []string) (string, error) {
 func (b *Browser) FillInput(selector, value string) error {
 	b.logger.Debugf("🖊️  填充输入框 %s: %s", selector, value)
 
-	timeoutCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(b.ctx, 15*time.Second)
 	defer cancel()
 
 	err := chromedp.Run(timeoutCtx,
+		// 等待元素可见
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		// 多重清空确保输入框完全清空
-		chromedp.Focus(selector),
-		chromedp.Clear(selector),
-		// 使用JavaScript清空，更可靠
+		chromedp.Sleep(300*time.Millisecond), // 等待元素完全加载
+
+		// 先点击激活输入框
+		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.Sleep(200*time.Millisecond),
+
+		// 聚焦到输入框
+		chromedp.Focus(selector, chromedp.ByQuery),
+		chromedp.Sleep(200*time.Millisecond),
+
+		// 第一步：彻底清空输入框
 		chromedp.Evaluate(fmt.Sprintf(`
 			try {
 				const el = document.querySelector('%s');
 				if (el) {
+					// 聚焦元素
+					el.focus();
+					
+					// 全选内容
+					el.select();
+					if (el.setSelectionRange) {
+						el.setSelectionRange(0, el.value.length);
+					}
+					
+					// 使用execCommand删除
+					document.execCommand('selectAll');
+					document.execCommand('delete');
+					
+					// 强制设置为空
+					el.value = '';
+					el.textContent = '';
+					if (el.innerHTML !== undefined) el.innerHTML = '';
+					
+					// 再次全选并删除以确保完全清空
+					el.select();
+					document.execCommand('delete');
+					el.value = '';
+					
+					console.log('Step 1 - Input cleared, value now: "' + el.value + '"');
+				}
+			} catch(e) { console.log('Step 1 clear failed:', e); }
+		`, escapeJSString(selector)), nil),
+
+		chromedp.Sleep(800*time.Millisecond), // 更长的等待时间确保清空完成
+
+		// 第二步：验证清空结果
+		chromedp.Evaluate(fmt.Sprintf(`
+			try {
+				const el = document.querySelector('%s');
+				if (el && el.value !== '') {
+					console.log('WARNING: Input not fully cleared, value: "' + el.value + '"');
+					// 如果还有内容，再次强制清空
 					el.value = '';
 					el.focus();
+					el.select();
+					document.execCommand('delete');
+					el.value = '';
 				}
-			} catch(e) { console.log('Clear failed:', e); }
+				console.log('Step 2 - Final clear check, value: "' + el.value + '"');
+			} catch(e) { console.log('Step 2 verify failed:', e); }
 		`, escapeJSString(selector)), nil),
-		chromedp.Sleep(200*time.Millisecond), // 短暂延迟
-		chromedp.SendKeys(selector, value),
+
+		chromedp.Sleep(400*time.Millisecond),
+
+		// 第三步：设置新值
+		chromedp.Evaluate(fmt.Sprintf(`
+			try {
+				const el = document.querySelector('%s');
+				if (el) {
+					// 确保元素处于聚焦状态
+					el.focus();
+					
+					// 最后一次确保清空
+					el.value = '';
+					
+					// 设置新值
+					el.value = '%s';
+					
+					// 触发所有相关事件
+					el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+					el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+					el.dispatchEvent(new Event('keyup', { bubbles: true, cancelable: true }));
+					el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
+					
+					console.log('Step 3 - Input filled with: "' + el.value + '"');
+				}
+			} catch(e) { console.log('Step 3 fill failed:', e); }
+		`, escapeJSString(selector), escapeJSString(value)), nil),
+
+		chromedp.Sleep(400*time.Millisecond), // 等待设置完成
 		chromedp.Sleep(500*time.Millisecond), // 确保输入完成
 	)
 
 	if err == nil {
 		// 验证输入是否成功
 		if err := b.verifyInput(selector, value); err != nil {
-			b.logger.Warnf("⚠️  输入验证失败: %v", err)
+			b.logger.Warnf("⚠️  输入验证失败，尝试重新输入: %v", err)
+			// 重试一次
+			err = b.retryFillInput(selector, value)
 		} else {
 			b.logger.Debugf("✅ 成功填充输入框: %s", selector)
+		}
+	}
+
+	return err
+}
+
+// retryFillInput 重试填充输入框
+func (b *Browser) retryFillInput(selector, value string) error {
+	b.logger.Debugf("🔄 重试填充输入框: %s", selector)
+
+	timeoutCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+	defer cancel()
+
+	// 更激进的清空和输入策略
+	err := chromedp.Run(timeoutCtx,
+		// 点击并聚焦
+		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.Sleep(200*time.Millisecond),
+
+		// 使用更强力的清空和设置方法
+		chromedp.Evaluate(fmt.Sprintf(`
+			try {
+				const el = document.querySelector('%s');
+				if (el) {
+					// 更激进的清空方法
+					el.focus();
+					
+					// 连续多次全选删除
+					for (let i = 0; i < 3; i++) {
+						el.select();
+						if (el.setSelectionRange) {
+							el.setSelectionRange(0, el.value.length);
+						}
+						document.execCommand('selectAll');
+						document.execCommand('delete');
+						el.value = '';
+					}
+					
+					// 最后确保完全为空
+					el.value = '';
+					el.textContent = '';
+					if (el.innerHTML !== undefined) el.innerHTML = '';
+					
+					console.log('Retry clear completed, value: "' + el.value + '"');
+				}
+			} catch(e) { console.log('Retry clear failed:', e); }
+		`, escapeJSString(selector)), nil),
+
+		chromedp.Sleep(600*time.Millisecond), // 更长等待时间
+
+		// 设置新值
+		chromedp.Evaluate(fmt.Sprintf(`
+			try {
+				const el = document.querySelector('%s');
+				if (el) {
+					el.focus();
+					el.value = '%s';
+					
+					// 触发事件
+					el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+					el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+					el.dispatchEvent(new Event('keyup', { bubbles: true, cancelable: true }));
+					
+					console.log('Retry fill completed, value: "' + el.value + '"');
+				}
+			} catch(e) { console.log('Retry fill failed:', e); }
+		`, escapeJSString(selector), escapeJSString(value)), nil),
+		chromedp.Sleep(500*time.Millisecond),
+	)
+
+	if err == nil {
+		// 最终验证
+		if verifyErr := b.verifyInput(selector, value); verifyErr != nil {
+			b.logger.Warnf("⚠️  重试后仍然验证失败: %v", verifyErr)
+			return verifyErr
+		} else {
+			b.logger.Debugf("✅ 重试填充成功: %s", selector)
 		}
 	}
 
@@ -251,6 +437,58 @@ func (b *Browser) ClickElement(selector string) error {
 
 	if err == nil {
 		b.logger.Debugf("✅ 成功点击元素: %s", selector)
+	}
+
+	return err
+}
+
+// ClickCheckbox 点击复选框
+func (b *Browser) ClickCheckbox(selector string) error {
+	b.logger.Debugf("☑️  点击复选框: %s", selector)
+
+	timeoutCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+	defer cancel()
+
+	// 首先检查复选框是否已经被选中
+	var checkedAttr string
+	var isChecked bool
+	err := chromedp.Run(timeoutCtx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.AttributeValue(selector, "checked", &checkedAttr, &isChecked),
+	)
+
+	if err != nil {
+		b.logger.Warnf("获取复选框状态失败，继续尝试点击: %v", err)
+	}
+
+	if isChecked && checkedAttr != "" {
+		b.logger.Debug("✅ 复选框已经选中，无需点击")
+		return nil
+	}
+
+	// 点击复选框
+	err = chromedp.Run(timeoutCtx,
+		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.Sleep(500*time.Millisecond), // 等待状态更新
+	)
+
+	if err != nil {
+		// 如果普通点击失败，尝试用JavaScript点击
+		b.logger.Debugf("普通点击失败，尝试JavaScript点击")
+		err = chromedp.Run(timeoutCtx,
+			chromedp.Evaluate(fmt.Sprintf(`
+				try {
+					const checkbox = document.querySelector('%s');
+					if (checkbox && !checkbox.checked) {
+						checkbox.click();
+					}
+				} catch(e) { console.log('Checkbox click failed:', e); }
+			`, escapeJSString(selector)), nil),
+		)
+	}
+
+	if err == nil {
+		b.logger.Debugf("✅ 成功点击复选框: %s", selector)
 	}
 
 	return err

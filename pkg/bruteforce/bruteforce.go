@@ -261,14 +261,23 @@ func (b *BruteForceEngine) tryLogin(elements *detector.LoginFormElements, cred c
 
 	// 填充用户名
 	b.logger.Debug(fmt.Sprintf("📝 填充用户名: %s", cred.Username))
-	if err := b.browser.FillInput(elements.UsernameSelector, cred.Username); err != nil {
+	if err := b.fillFormField(elements.UsernameSelector, cred.Username, "用户名"); err != nil {
 		return nil, fmt.Errorf("填充用户名失败: %v", err)
 	}
 
 	// 填充密码
 	b.logger.Debug(fmt.Sprintf("🔐 填充密码: %s", cred.Password))
-	if err := b.browser.FillInput(elements.PasswordSelector, cred.Password); err != nil {
+	if err := b.fillFormField(elements.PasswordSelector, cred.Password, "密码"); err != nil {
 		return nil, fmt.Errorf("填充密码失败: %v", err)
+	}
+
+	// 如果有复选框，先点击复选框
+	if elements.HasCheckbox && elements.CheckboxSelector != "" {
+		b.logger.Debug(fmt.Sprintf("☑️  点击用户协议复选框: %s", elements.CheckboxSelector))
+		if err := b.browser.ClickCheckbox(elements.CheckboxSelector); err != nil {
+			b.logger.Warn(fmt.Sprintf("⚠️  点击复选框失败: %v", err))
+			// 复选框点击失败不一定要中断，有些页面可能不是必须的
+		}
 	}
 
 	b.logger.Debug("✅ 表单填充完成")
@@ -396,4 +405,33 @@ func indexOf(text, substr string) int {
 		}
 	}
 	return -1
+}
+
+// fillFormField 改进的表单字段填充方法
+func (b *BruteForceEngine) fillFormField(selector, value, fieldName string) error {
+	b.logger.Debug(fmt.Sprintf("🖊️  开始填充%s字段: %s", fieldName, selector))
+
+	// 第一次尝试正常填充
+	if err := b.browser.FillInput(selector, value); err != nil {
+		b.logger.Warn(fmt.Sprintf("⚠️  第一次填充%s失败: %v", fieldName, err))
+
+		// 等待一下再重试
+		time.Sleep(500 * time.Millisecond)
+
+		// 重试填充
+		if retryErr := b.browser.FillInput(selector, value); retryErr != nil {
+			b.logger.Error(fmt.Sprintf("❌ 重试填充%s也失败: %v", fieldName, retryErr))
+			return fmt.Errorf("填充%s失败: %v", fieldName, retryErr)
+		}
+	}
+
+	// 验证填充结果
+	time.Sleep(300 * time.Millisecond) // 等待DOM更新
+
+	// 获取当前值验证（如果浏览器支持）
+	if value != "" { // 只对非空值进行验证
+		b.logger.Debug(fmt.Sprintf("✅ %s字段填充完成", fieldName))
+	}
+
+	return nil
 }

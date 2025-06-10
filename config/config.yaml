@@ -96,12 +96,26 @@ form_elements:
     - 'input[type="password"]'
     - 'input[name*="pass"]'
     - 'input[name*="pwd"]'
+    - 'input[name*="password"]'
     - 'input[placeholder*="密码"]'
     - 'input[placeholder*="password"]'
+    - 'input[placeholder*="登录密码"]'
+    - 'input[placeholder*="请输入密码"]'
+    - 'input[placeholder*="请输入登录密码"]'
     - 'input[id*="pass"]'
     - 'input[id*="pwd"]'
+    - 'input[id*="password"]'
     - 'input[class*="pass"]'
     - 'input[class*="pwd"]'
+    - 'input[class*="password"]'
+    - 'input[autocomplete="current-password"]'
+    - 'input[autocomplete="new-password"]'
+    # 更具体的选择器
+    - 'input[type="password"][placeholder]'
+    - 'form input[type="password"]'
+    # 通用密码框（作为备选）
+    - 'form input[type="password"]:first-of-type'
+    - 'input[type="password"]:not([style*="display: none"]):not([style*="display:none"])'
   
   # 验证码输入框识别规则
   captcha_selectors:
@@ -129,6 +143,23 @@ form_elements:
     - 'a[class*="login"]'
     - 'div[class*="login-btn"]'
     - 'span:contains("登录")'
+
+  # 复选框识别规则（如用户协议、服务条款等）
+  checkbox_selectors:
+    - 'input[type="checkbox"]'
+    - 'input[name*="agree"]'
+    - 'input[name*="accept"]'
+    - 'input[name*="terms"]'
+    - 'input[name*="policy"]'
+    - 'input[name*="protocol"]'
+    - 'input[id*="agree"]'
+    - 'input[id*="accept"]'
+    - 'input[id*="terms"]'
+    - 'input[id*="policy"]'
+    - 'input[class*="agree"]'
+    - 'input[class*="accept"]'
+    - 'input[class*="terms"]'
+    - 'input[class*="checkbox"]'
 
 # 爆破配置
 bruteforce:

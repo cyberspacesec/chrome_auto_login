@@ -42,6 +42,7 @@ type FormElementsConfig struct {
 	PasswordSelectors []string `yaml:"password_selectors"`
 	CaptchaSelectors  []string `yaml:"captcha_selectors"`
 	SubmitSelectors   []string `yaml:"submit_selectors"`
+	CheckboxSelectors []string `yaml:"checkbox_selectors"`
 }
 
 // BruteforceConfig 爆破配置
@@ -281,6 +282,10 @@ func (c *Config) GetCaptchaSelectors() []string {
 // GetSubmitSelectors 获取提交按钮选择器
 func (c *Config) GetSubmitSelectors() []string {
 	return c.FormElements.SubmitSelectors
+}
+
+func (c *Config) GetCheckboxSelectors() []string {
+	return c.FormElements.CheckboxSelectors
 }
 
 // GetCredentials 获取凭据列表

@@ -389,6 +389,9 @@ func printAnalysisResult(analysis *detector.PageAnalysis) {
 		if analysis.FormElements.CaptchaSelector != "" {
 			util.LogInfo(fmt.Sprintf("  验证码输入框: %s", analysis.FormElements.CaptchaSelector))
 		}
+		if analysis.FormElements.CheckboxSelector != "" {
+			util.LogInfo(fmt.Sprintf("  用户协议复选框: %s", analysis.FormElements.CheckboxSelector))
+		}
 		if analysis.FormElements.SubmitSelector != "" {
 			util.LogInfo(fmt.Sprintf("  提交按钮: %s", analysis.FormElements.SubmitSelector))
 		}
